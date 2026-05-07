@@ -59,6 +59,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	migrateCtx, migrateCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer migrateCancel()
+	if err := mysqlrepo.AutoMigrate(migrateCtx, db); err != nil {
+		logger.Error("auto migrate database", "error", err)
+		os.Exit(1)
+	}
+
 	objectStore, err := s3store.New(ctx, cfg.Storage)
 	if err != nil {
 		logger.Error("create object store", "error", err)
@@ -66,11 +73,17 @@ func main() {
 	}
 
 	postRepo := mysqlrepo.NewPostRepository(db)
+	userRepo := mysqlrepo.NewUserRepository(db)
 	postService := service.NewPostService(postRepo, objectStore, markdown.NewRenderer(), cfg.PublicBaseURL)
+	authService := service.NewAuthService(userRepo, service.AuthConfig{
+		JWTSecret:      cfg.JWTSecret,
+		JWTIssuer:      cfg.JWTIssuer,
+		AccessTokenTTL: cfg.JWTAccessTokenTTL,
+	})
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr(),
-		Handler:           httptransport.NewRouter(postService, cfg, logger),
+		Handler:           httptransport.NewRouter(postService, authService, cfg, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

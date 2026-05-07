@@ -20,15 +20,22 @@ import (
 // Router contains HTTP handlers for public and admin clients.
 type Router struct {
 	postService *service.PostService
+	authService *service.AuthService
 	cfg         config.Config
 	logger      *slog.Logger
 	mux         *http.ServeMux
 }
 
 // NewRouter wires all HTTP routes.
-func NewRouter(postService *service.PostService, cfg config.Config, logger *slog.Logger) http.Handler {
+func NewRouter(
+	postService *service.PostService,
+	authService *service.AuthService,
+	cfg config.Config,
+	logger *slog.Logger,
+) http.Handler {
 	router := &Router{
 		postService: postService,
+		authService: authService,
 		cfg:         cfg,
 		logger:      logger,
 		mux:         http.NewServeMux(),
@@ -43,6 +50,8 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("GET /posts", r.handleListPublishedPosts)
 	r.mux.HandleFunc("GET /posts/{slug}", r.handleGetPublishedPost)
 
+	r.mux.HandleFunc("POST /admin/login", r.handleLogin)
+	r.mux.HandleFunc("GET /admin/me", r.requireAdmin(r.handleMe))
 	r.mux.HandleFunc("GET /admin/posts", r.requireAdmin(r.handleListAdminPosts))
 	r.mux.HandleFunc("POST /admin/posts", r.requireAdmin(r.handleSaveDraft))
 	r.mux.HandleFunc("POST /admin/posts/{id}/publish", r.requireAdmin(r.handlePublish))
@@ -77,6 +86,36 @@ func (r *Router) handleGetPublishedPost(w http.ResponseWriter, request *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, post)
+}
+
+func (r *Router) handleLogin(w http.ResponseWriter, request *http.Request) {
+	var input service.LoginInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := r.authService.Login(request.Context(), input)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "login failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (r *Router) handleMe(w http.ResponseWriter, request *http.Request) {
+	user, ok := authenticatedUserFromContext(request.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, user)
 }
 
 func (r *Router) handleListAdminPosts(w http.ResponseWriter, request *http.Request) {
@@ -125,17 +164,32 @@ func (r *Router) handlePublish(w http.ResponseWriter, request *http.Request) {
 
 func (r *Router) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
-		token := request.Header.Get("X-Admin-API-Key")
-		if token == "" {
-			token = strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-		}
-		if token == "" || token != r.cfg.AdminAPIKey {
+		user, err := r.authService.VerifyAccessToken(bearerToken(request))
+		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
-		next(w, request)
+		ctx := context.WithValue(request.Context(), authenticatedUserContextKey{}, user)
+		next(w, request.WithContext(ctx))
 	}
+}
+
+type authenticatedUserContextKey struct{}
+
+func authenticatedUserFromContext(ctx context.Context) (service.AuthenticatedUser, bool) {
+	user, ok := ctx.Value(authenticatedUserContextKey{}).(service.AuthenticatedUser)
+	return user, ok
+}
+
+func bearerToken(request *http.Request) string {
+	authHeader := strings.TrimSpace(request.Header.Get("Authorization"))
+	scheme, token, ok := strings.Cut(authHeader, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+
+	return strings.TrimSpace(token)
 }
 
 func (r *Router) revalidateNext(ctx context.Context, post domain.Post) error {

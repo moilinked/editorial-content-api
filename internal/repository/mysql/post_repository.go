@@ -116,20 +116,20 @@ func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter
 }
 
 type postRecord struct {
-	ID               string            `gorm:"column:id;primaryKey"`
-	Title            string            `gorm:"column:title"`
-	Slug             string            `gorm:"column:slug"`
-	Excerpt          string            `gorm:"column:excerpt"`
-	MarkdownPath     string            `gorm:"column:markdown_path"`
-	RenderedHTMLPath string            `gorm:"column:rendered_html_path"`
-	CoverImagePath   *string           `gorm:"column:cover_image_path"`
-	Status           domain.PostStatus `gorm:"column:status"`
-	AuthorID         *string           `gorm:"column:author_id"`
-	SEOTitle         *string           `gorm:"column:seo_title"`
-	SEODescription   *string           `gorm:"column:seo_description"`
-	PublishedAt      *time.Time        `gorm:"column:published_at"`
-	CreatedAt        time.Time         `gorm:"column:created_at"`
-	UpdatedAt        time.Time         `gorm:"column:updated_at"`
+	ID               string            `gorm:"column:id;type:varchar(32);primaryKey"`
+	Title            string            `gorm:"column:title;type:varchar(255);not null"`
+	Slug             string            `gorm:"column:slug;type:varchar(255);not null;uniqueIndex"`
+	Excerpt          string            `gorm:"column:excerpt;type:text;not null"`
+	MarkdownPath     string            `gorm:"column:markdown_path;type:varchar(512);not null"`
+	RenderedHTMLPath string            `gorm:"column:rendered_html_path;type:varchar(512);not null"`
+	CoverImagePath   *string           `gorm:"column:cover_image_path;type:varchar(512)"`
+	Status           domain.PostStatus `gorm:"column:status;type:varchar(20);not null;check:status in ('draft','published','archived');index:posts_status_updated_at_idx,priority:1;index:posts_status_published_at_idx,priority:1"`
+	AuthorID         *string           `gorm:"column:author_id;type:varchar(255)"`
+	SEOTitle         *string           `gorm:"column:seo_title;type:varchar(255)"`
+	SEODescription   *string           `gorm:"column:seo_description;type:text"`
+	PublishedAt      *time.Time        `gorm:"column:published_at;type:datetime(6);index:posts_status_published_at_idx,priority:2,sort:desc"`
+	CreatedAt        time.Time         `gorm:"column:created_at;type:datetime(6);not null;autoCreateTime"`
+	UpdatedAt        time.Time         `gorm:"column:updated_at;type:datetime(6);not null;autoUpdateTime;index:posts_status_updated_at_idx,priority:2,sort:desc"`
 }
 
 func (postRecord) TableName() string {

@@ -18,7 +18,9 @@ type Config struct {
 	DatabaseMaxIdleConns    int
 	DatabaseConnMaxLifetime time.Duration
 	PublicBaseURL           string
-	AdminAPIKey             string
+	JWTSecret               string
+	JWTIssuer               string
+	JWTAccessTokenTTL       time.Duration
 	RevalidateURL           string
 	RevalidateSecret        string
 	Storage                 StorageConfig
@@ -46,7 +48,9 @@ func Load() (Config, error) {
 		DatabaseMaxIdleConns:    getenvInt("DATABASE_MAX_IDLE_CONNS", 5),
 		DatabaseConnMaxLifetime: getenvDuration("DATABASE_CONN_MAX_LIFETIME", 30*time.Minute),
 		PublicBaseURL:           getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
-		AdminAPIKey:             os.Getenv("ADMIN_API_KEY"),
+		JWTSecret:               os.Getenv("JWT_SECRET"),
+		JWTIssuer:               getenv("JWT_ISSUER", "editorial-content-api"),
+		JWTAccessTokenTTL:       getenvDuration("JWT_ACCESS_TOKEN_TTL", time.Hour),
 		RevalidateURL:           os.Getenv("NEXT_REVALIDATE_URL"),
 		RevalidateSecret:        os.Getenv("NEXT_REVALIDATE_SECRET"),
 		Storage: StorageConfig{
@@ -63,8 +67,11 @@ func Load() (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
-	if cfg.AdminAPIKey == "" {
-		return Config{}, fmt.Errorf("ADMIN_API_KEY is required")
+	if cfg.JWTSecret == "" {
+		return Config{}, fmt.Errorf("JWT_SECRET is required")
+	}
+	if cfg.JWTAccessTokenTTL <= 0 {
+		return Config{}, fmt.Errorf("JWT_ACCESS_TOKEN_TTL must be positive")
 	}
 	if cfg.Storage.Bucket == "" {
 		return Config{}, fmt.Errorf("S3_BUCKET is required")

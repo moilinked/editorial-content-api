@@ -79,6 +79,16 @@ posts
 - published_at
 - created_at
 - updated_at
+
+users
+- id
+- email
+- password_hash
+- role: admin
+- is_active
+- last_login_at
+- created_at
+- updated_at
 ```
 
 当前设计已取消文章版本表。
@@ -134,7 +144,23 @@ GET /posts?limit=20&offset=0
 GET /posts/{slug}
 ```
 
-后台接口需要携带 `X-Admin-API-Key` 或 `Authorization: Bearer <token>`：
+登录接口：
+
+```text
+POST /admin/login
+GET  /admin/me
+```
+
+登录请求示例：
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "change-me"
+}
+```
+
+后台接口需要携带 `Authorization: Bearer <accessToken>`：
 
 ```text
 GET  /admin/posts?status=draft&limit=20&offset=0
@@ -204,6 +230,26 @@ go run ./cmd/server
 docker compose -f deployments/docker-compose.yml up --build
 ```
 
+API 启动后会通过 GORM `AutoMigrate` 自动创建或更新 `posts`、`users` 等表结构。
+
+## 创建管理员账号
+
+应用不会自动创建首个管理员。API 首次启动并自动建表后，手动插入一个 `admin` 用户，并把 `password_hash` 替换为你生成的 bcrypt 哈希：
+
+```sql
+insert into users (
+  id, email, password_hash, role, is_active, created_at, updated_at
+) values (
+  '0123456789abcdef0123456789abcdef',
+  'admin@example.com',
+  '$2a$12$replace_with_your_bcrypt_hash',
+  'admin',
+  true,
+  utc_timestamp(6),
+  utc_timestamp(6)
+);
+```
+
 ## 环境变量
 
 ```text
@@ -213,7 +259,9 @@ HTTP_PORT=8080
 
 DATABASE_URL=blog:blog_password@tcp(localhost:3306)/blog?parseTime=true&loc=UTC
 
-ADMIN_API_KEY=change-me
+JWT_SECRET=change-this-to-a-long-random-secret
+JWT_ISSUER=editorial-content-api
+JWT_ACCESS_TOKEN_TTL=1h
 PUBLIC_BASE_URL=http://localhost:8080
 
 S3_ENDPOINT=http://localhost:8333
@@ -228,7 +276,7 @@ NEXT_REVALIDATE_URL=http://localhost:3000/api/revalidate
 NEXT_REVALIDATE_SECRET=change-me-too
 ```
 
-生产环境必须替换 `ADMIN_API_KEY`、`NEXT_REVALIDATE_SECRET` 和 SeaweedFS S3 凭据。
+生产环境必须替换 `JWT_SECRET`、`NEXT_REVALIDATE_SECRET` 和 SeaweedFS S3 凭据。
 
 ## Next Blog Revalidate 接口约定
 
@@ -260,13 +308,11 @@ internal/repository         MySQL 仓储
 internal/service            文章业务逻辑
 internal/storage            对象存储接口和 SeaweedFS S3 实现
 internal/transport/http     HTTP 路由和处理器
-migrations                  MySQL 初始化 SQL
 deployments                 Docker Compose 和 SeaweedFS 配置
 ```
 
 ## 后续建议
 
-- 增加登录系统，用 JWT 或会话替代当前简单的 `ADMIN_API_KEY`。
 - 增加图片上传接口，统一生成 WebP、尺寸和公开访问路径。
 - 增加标签、分类和搜索表。
 - 增加后台预览接口：只渲染 Markdown，不保存草稿。
