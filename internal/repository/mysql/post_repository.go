@@ -22,10 +22,6 @@ func NewPostRepository(db *gorm.DB) *PostRepository {
 
 // Create inserts a new post row.
 func (r *PostRepository) Create(ctx context.Context, post domain.Post) (domain.Post, error) {
-	now := time.Now().UTC()
-	post.CreatedAt = now
-	post.UpdatedAt = now
-
 	record := postRecordFromDomain(post)
 	if err := r.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return domain.Post{}, fmt.Errorf("create post: %w", err)
@@ -36,8 +32,6 @@ func (r *PostRepository) Create(ctx context.Context, post domain.Post) (domain.P
 
 // Update writes editable post metadata and publication state.
 func (r *PostRepository) Update(ctx context.Context, post domain.Post) (domain.Post, error) {
-	post.UpdatedAt = time.Now().UTC()
-
 	values := map[string]any{
 		"title":              post.Title,
 		"slug":               post.Slug,
@@ -50,7 +44,6 @@ func (r *PostRepository) Update(ctx context.Context, post domain.Post) (domain.P
 		"seo_title":          stringPointer(post.SEOTitle),
 		"seo_description":    stringPointer(post.SEODescription),
 		"published_at":       post.PublishedAt,
-		"updated_at":         post.UpdatedAt,
 	}
 
 	result := r.db.WithContext(ctx).Model(&postRecord{}).Where("id = ?", post.ID).Updates(values)
@@ -59,6 +52,24 @@ func (r *PostRepository) Update(ctx context.Context, post domain.Post) (domain.P
 	}
 
 	return r.FindByID(ctx, post.ID)
+}
+
+// UpdateStatus updates only publication status fields for a post.
+func (r *PostRepository) UpdateStatus(
+	ctx context.Context,
+	id string,
+	status domain.PostStatus,
+	publishedAt *time.Time,
+) (domain.Post, error) {
+	result := r.db.WithContext(ctx).Model(&postRecord{}).Where("id = ?", id).Updates(map[string]any{
+		"status":       status,
+		"published_at": publishedAt,
+	})
+	if result.Error != nil {
+		return domain.Post{}, fmt.Errorf("update post status: %w", result.Error)
+	}
+
+	return r.FindByID(ctx, id)
 }
 
 // FindByID returns a post by ID.
@@ -116,20 +127,18 @@ func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter
 }
 
 type postRecord struct {
-	ID               string            `gorm:"column:id;type:varchar(32);primaryKey"`
+	SQLModel
 	Title            string            `gorm:"column:title;type:varchar(255);not null"`
 	Slug             string            `gorm:"column:slug;type:varchar(255);not null;uniqueIndex"`
 	Excerpt          string            `gorm:"column:excerpt;type:text;not null"`
 	MarkdownPath     string            `gorm:"column:markdown_path;type:varchar(512);not null"`
 	RenderedHTMLPath string            `gorm:"column:rendered_html_path;type:varchar(512);not null"`
 	CoverImagePath   *string           `gorm:"column:cover_image_path;type:varchar(512)"`
-	Status           domain.PostStatus `gorm:"column:status;type:varchar(20);not null;check:status in ('draft','published','archived');index:posts_status_updated_at_idx,priority:1;index:posts_status_published_at_idx,priority:1"`
+	Status           domain.PostStatus `gorm:"column:status;type:varchar(20);not null;check:status in ('draft','published','archived');index;index:posts_status_published_at_idx,priority:1"`
 	AuthorID         *string           `gorm:"column:author_id;type:varchar(255)"`
 	SEOTitle         *string           `gorm:"column:seo_title;type:varchar(255)"`
 	SEODescription   *string           `gorm:"column:seo_description;type:text"`
 	PublishedAt      *time.Time        `gorm:"column:published_at;type:datetime(6);index:posts_status_published_at_idx,priority:2,sort:desc"`
-	CreatedAt        time.Time         `gorm:"column:created_at;type:datetime(6);not null;autoCreateTime"`
-	UpdatedAt        time.Time         `gorm:"column:updated_at;type:datetime(6);not null;autoUpdateTime;index:posts_status_updated_at_idx,priority:2,sort:desc"`
 }
 
 func (postRecord) TableName() string {
@@ -138,7 +147,9 @@ func (postRecord) TableName() string {
 
 func postRecordFromDomain(post domain.Post) postRecord {
 	return postRecord{
-		ID:               post.ID,
+		SQLModel: SQLModel{
+			ID: post.ID,
+		},
 		Title:            post.Title,
 		Slug:             post.Slug,
 		Excerpt:          post.Excerpt,
@@ -150,8 +161,6 @@ func postRecordFromDomain(post domain.Post) postRecord {
 		SEOTitle:         stringPointer(post.SEOTitle),
 		SEODescription:   stringPointer(post.SEODescription),
 		PublishedAt:      post.PublishedAt,
-		CreatedAt:        post.CreatedAt,
-		UpdatedAt:        post.UpdatedAt,
 	}
 }
 

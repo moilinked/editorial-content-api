@@ -19,6 +19,7 @@ import (
 type PostRepository interface {
 	Create(ctx context.Context, post domain.Post) (domain.Post, error)
 	Update(ctx context.Context, post domain.Post) (domain.Post, error)
+	UpdateStatus(ctx context.Context, id string, status domain.PostStatus, publishedAt *time.Time) (domain.Post, error)
 	FindByID(ctx context.Context, id string) (domain.Post, error)
 	FindPublishedBySlug(ctx context.Context, slug string) (domain.Post, error)
 	List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, error)
@@ -147,12 +148,12 @@ func (s *PostService) Publish(ctx context.Context, id string) (domain.Post, erro
 	}
 
 	now := time.Now().UTC()
-	post.Status = domain.PostStatusPublished
-	if post.PublishedAt == nil {
-		post.PublishedAt = &now
+	publishedAt := post.PublishedAt
+	if publishedAt == nil {
+		publishedAt = &now
 	}
 
-	return s.repo.Update(ctx, post)
+	return s.repo.UpdateStatus(ctx, id, domain.PostStatusPublished, publishedAt)
 }
 
 // GetPublicBySlug loads a published post and its rendered HTML.
