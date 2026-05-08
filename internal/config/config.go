@@ -21,6 +21,7 @@ type Config struct {
 	JWTSecret               string
 	JWTIssuer               string
 	JWTAccessTokenTTL       time.Duration
+	ImageUploadMaxBytes     int64
 	RevalidateURL           string
 	RevalidateSecret        string
 	Storage                 StorageConfig
@@ -51,6 +52,7 @@ func Load() (Config, error) {
 		JWTSecret:               os.Getenv("JWT_SECRET"),
 		JWTIssuer:               getenv("JWT_ISSUER", "editorial-content-api"),
 		JWTAccessTokenTTL:       getenvDuration("JWT_ACCESS_TOKEN_TTL", time.Hour),
+		ImageUploadMaxBytes:     getenvInt64("IMAGE_UPLOAD_MAX_BYTES", 10<<20),
 		RevalidateURL:           os.Getenv("NEXT_REVALIDATE_URL"),
 		RevalidateSecret:        os.Getenv("NEXT_REVALIDATE_SECRET"),
 		Storage: StorageConfig{
@@ -75,6 +77,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Storage.Bucket == "" {
 		return Config{}, fmt.Errorf("S3_BUCKET is required")
+	}
+	if cfg.ImageUploadMaxBytes <= 0 {
+		return Config{}, fmt.Errorf("IMAGE_UPLOAD_MAX_BYTES must be positive")
 	}
 
 	return cfg, nil
@@ -101,6 +106,20 @@ func getenvInt(key string, fallback int) int {
 	}
 
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
+}
+
+func getenvInt64(key string, fallback int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return fallback
 	}

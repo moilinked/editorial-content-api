@@ -166,6 +166,18 @@ GET  /admin/me
 GET  /admin/posts?status=draft&limit=20&offset=0
 POST /admin/posts
 POST /admin/posts/{id}/publish
+POST /admin/uploads/images
+```
+
+图片上传请求使用 `multipart/form-data`，文件字段名为 `file`。服务不调整图片尺寸和格式，只保存原文件并返回访问路径：
+
+```json
+{
+  "id": "f8a2...",
+  "key": "uploads/images/2026/05/f8a2.../original.jpg",
+  "url": "http://localhost:8333/blog/uploads/images/2026/05/f8a2.../original.jpg",
+  "contentType": "image/jpeg"
+}
 ```
 
 保存草稿请求示例：
@@ -262,6 +274,7 @@ DATABASE_URL=blog:blog_password@tcp(localhost:3306)/blog?parseTime=true&loc=UTC
 JWT_SECRET=change-this-to-a-long-random-secret
 JWT_ISSUER=editorial-content-api
 JWT_ACCESS_TOKEN_TTL=1h
+IMAGE_UPLOAD_MAX_BYTES=10485760
 PUBLIC_BASE_URL=http://localhost:8080
 
 S3_ENDPOINT=http://localhost:8333
@@ -313,7 +326,6 @@ deployments                 Docker Compose 和 SeaweedFS 配置
 
 ## 后续建议
 
-- 增加图片上传接口，统一生成 WebP、尺寸和公开访问路径。
 - 增加标签、分类和搜索表。
 - 增加后台预览接口：只渲染 Markdown，不保存草稿。
 - 生产环境增加数据库和 SeaweedFS 数据目录备份任务。

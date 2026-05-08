@@ -19,26 +19,29 @@ import (
 
 // Router contains HTTP handlers for public and admin clients.
 type Router struct {
-	postService *service.PostService
-	authService *service.AuthService
-	cfg         config.Config
-	logger      *slog.Logger
-	mux         *http.ServeMux
+	postService  *service.PostService
+	authService  *service.AuthService
+	imageService *service.ImageService
+	cfg          config.Config
+	logger       *slog.Logger
+	mux          *http.ServeMux
 }
 
 // NewRouter wires all HTTP routes.
 func NewRouter(
 	postService *service.PostService,
 	authService *service.AuthService,
+	imageService *service.ImageService,
 	cfg config.Config,
 	logger *slog.Logger,
 ) http.Handler {
 	router := &Router{
-		postService: postService,
-		authService: authService,
-		cfg:         cfg,
-		logger:      logger,
-		mux:         http.NewServeMux(),
+		postService:  postService,
+		authService:  authService,
+		imageService: imageService,
+		cfg:          cfg,
+		logger:       logger,
+		mux:          http.NewServeMux(),
 	}
 
 	router.routes()
@@ -52,6 +55,7 @@ func (r *Router) routes() {
 
 	r.mux.HandleFunc("POST /admin/login", r.handleLogin)
 	r.mux.HandleFunc("GET /admin/me", r.requireAdmin(r.handleMe))
+	r.mux.HandleFunc("POST /admin/uploads/images", r.requireAdmin(r.handleUploadImage))
 	r.mux.HandleFunc("GET /admin/posts", r.requireAdmin(r.handleListAdminPosts))
 	r.mux.HandleFunc("POST /admin/posts", r.requireAdmin(r.handleSaveDraft))
 	r.mux.HandleFunc("POST /admin/posts/{id}/publish", r.requireAdmin(r.handlePublish))
@@ -116,6 +120,38 @@ func (r *Router) handleMe(w http.ResponseWriter, request *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, user)
+}
+
+func (r *Router) handleUploadImage(w http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(w, request.Body, r.cfg.ImageUploadMaxBytes)
+
+	file, _, err := request.FormFile("file")
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "image file is required")
+		return
+	}
+	defer file.Close()
+
+	result, err := r.imageService.Upload(request.Context(), file)
+	if err != nil {
+		if errors.Is(err, service.ErrImageTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidImage) {
+			writeError(w, http.StatusBadRequest, "invalid image")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "upload image")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (r *Router) handleListAdminPosts(w http.ResponseWriter, request *http.Request) {

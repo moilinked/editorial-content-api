@@ -75,6 +75,9 @@ func main() {
 	postRepo := mysqlrepo.NewPostRepository(db)
 	userRepo := mysqlrepo.NewUserRepository(db)
 	postService := service.NewPostService(postRepo, objectStore, markdown.NewRenderer(), cfg.PublicBaseURL)
+	imageService := service.NewImageService(objectStore, service.ImageUploadConfig{
+		MaxBytes: cfg.ImageUploadMaxBytes,
+	})
 	authService := service.NewAuthService(userRepo, service.AuthConfig{
 		JWTSecret:      cfg.JWTSecret,
 		JWTIssuer:      cfg.JWTIssuer,
@@ -83,7 +86,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr(),
-		Handler:           httptransport.NewRouter(postService, authService, cfg, logger),
+		Handler:           httptransport.NewRouter(postService, authService, imageService, cfg, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
