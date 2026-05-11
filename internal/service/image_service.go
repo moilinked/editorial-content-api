@@ -39,7 +39,8 @@ type ImageService struct {
 	maxBytes    int64
 }
 
-// NewImageService creates an ImageService.
+// NewImageService creates an ImageService. cfg.MaxBytes must be positive; callers
+// are expected to validate configuration before constructing the service.
 func NewImageService(objectStore storage.ObjectStore, cfg ImageUploadConfig) *ImageService {
 	return &ImageService{
 		objectStore: objectStore,
@@ -91,10 +92,6 @@ func (s *ImageService) Upload(ctx context.Context, reader io.Reader) (ImageUploa
 }
 
 func (s *ImageService) readLimited(reader io.Reader) ([]byte, error) {
-	if s.maxBytes <= 0 {
-		return nil, errors.New("image upload max bytes must be positive")
-	}
-
 	body, err := io.ReadAll(io.LimitReader(reader, s.maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read image upload: %w", err)

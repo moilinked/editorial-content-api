@@ -74,7 +74,13 @@ func main() {
 
 	postRepo := mysqlrepo.NewPostRepository(db)
 	userRepo := mysqlrepo.NewUserRepository(db)
-	postService := service.NewPostService(postRepo, objectStore, markdown.NewRenderer(), cfg.PublicBaseURL)
+
+	var revalidator service.Revalidator
+	if cfg.RevalidateURL != "" {
+		revalidator = httptransport.NewHTTPRevalidator(cfg.RevalidateURL, cfg.RevalidateSecret, logger)
+	}
+
+	postService := service.NewPostService(postRepo, objectStore, markdown.NewRenderer(), revalidator)
 	imageService := service.NewImageService(objectStore, service.ImageUploadConfig{
 		MaxBytes: cfg.ImageUploadMaxBytes,
 	})

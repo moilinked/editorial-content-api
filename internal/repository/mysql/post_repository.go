@@ -97,8 +97,9 @@ func (r *PostRepository) FindPublishedBySlug(ctx context.Context, slug string) (
 	return record.toDomain(), nil
 }
 
-// List returns posts sorted by update time.
-func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, error) {
+// List returns posts sorted by update time and the total number of rows
+// matching the filter (ignoring limit/offset) so callers can paginate.
+func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, int64, error) {
 	limit := filter.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -108,14 +109,23 @@ func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter
 		offset = 0
 	}
 
-	query := r.db.WithContext(ctx).Order("updated_at desc").Limit(limit).Offset(offset)
+	base := r.db.WithContext(ctx).Model(&postRecord{})
 	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
+		base = base.Where("status = ?", filter.Status)
+	}
+
+	var total int64
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count posts: %w", err)
 	}
 
 	var records []postRecord
-	if err := query.Find(&records).Error; err != nil {
-		return nil, fmt.Errorf("list posts: %w", err)
+	if err := base.Session(&gorm.Session{}).
+		Order("updated_at desc").
+		Limit(limit).
+		Offset(offset).
+		Find(&records).Error; err != nil {
+		return nil, 0, fmt.Errorf("list posts: %w", err)
 	}
 
 	posts := make([]domain.Post, 0, len(records))
@@ -123,7 +133,7 @@ func (r *PostRepository) List(ctx context.Context, filter domain.ListPostsFilter
 		posts = append(posts, record.toDomain())
 	}
 
-	return posts, nil
+	return posts, total, nil
 }
 
 type postRecord struct {

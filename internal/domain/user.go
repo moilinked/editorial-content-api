@@ -12,12 +12,12 @@ const (
 
 // User stores administrator identity and password metadata.
 type User struct {
-	ID           string     `json:"id"`
-	Email        string     `json:"email"`
-	PasswordHash string     `json:"-"`
-	Role         UserRole   `json:"role"`
-	IsActive     bool       `json:"isActive"`
-	LastLoginAt  *time.Time `json:"lastLoginAt,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID           string
+	Email        string
+	PasswordHash string
+	Role         UserRole
+	IsActive     bool
+	LastLoginAt  *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }

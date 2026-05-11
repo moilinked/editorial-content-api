@@ -1,8 +1,6 @@
 package httptransport
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,10 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"editorial-content-api/internal/config"
-	"editorial-content-api/internal/domain"
 	"editorial-content-api/internal/service"
 )
 
@@ -22,12 +18,13 @@ type Router struct {
 	postService  *service.PostService
 	authService  *service.AuthService
 	imageService *service.ImageService
+	loginLimiter *loginRateLimiter
 	cfg          config.Config
 	logger       *slog.Logger
 	mux          *http.ServeMux
 }
 
-// NewRouter wires all HTTP routes.
+// NewRouter wires all HTTP routes and middleware.
 func NewRouter(
 	postService *service.PostService,
 	authService *service.AuthService,
@@ -39,13 +36,18 @@ func NewRouter(
 		postService:  postService,
 		authService:  authService,
 		imageService: imageService,
+		loginLimiter: newLoginRateLimiter(cfg.LoginRateLimit, cfg.LoginRateWindow),
 		cfg:          cfg,
 		logger:       logger,
 		mux:          http.NewServeMux(),
 	}
 
 	router.routes()
-	return loggingMiddleware(logger, router.mux)
+
+	var handler http.Handler = router.mux
+	handler = corsMiddleware(cfg.AllowedOrigins, handler)
+	handler = loggingMiddleware(logger, handler)
+	return handler
 }
 
 func (r *Router) routes() {
@@ -53,224 +55,23 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("GET /posts", r.handleListPublishedPosts)
 	r.mux.HandleFunc("GET /posts/{slug}", r.handleGetPublishedPost)
 
-	r.mux.HandleFunc("POST /admin/login", r.handleLogin)
-	r.mux.HandleFunc("GET /admin/me", r.requireAdmin(r.handleMe))
-	r.mux.HandleFunc("POST /admin/uploads/images", r.requireAdmin(r.handleUploadImage))
-	r.mux.HandleFunc("GET /admin/posts", r.requireAdmin(r.handleListAdminPosts))
-	r.mux.HandleFunc("POST /admin/posts", r.requireAdmin(r.handleSaveDraft))
-	r.mux.HandleFunc("POST /admin/posts/{id}/publish", r.requireAdmin(r.handlePublish))
+	r.mux.HandleFunc("POST /admin/login", r.loginLimiter.middleware(r.handleLogin))
+	r.mux.HandleFunc("GET /admin/me", requireAdmin(r.authService, r.handleMe))
+	r.mux.HandleFunc("POST /admin/uploads/images", requireAdmin(r.authService, r.handleUploadImage))
+	r.mux.HandleFunc("GET /admin/posts", requireAdmin(r.authService, r.handleListAdminPosts))
+	r.mux.HandleFunc("POST /admin/posts", requireAdmin(r.authService, r.handleSaveDraft))
+	r.mux.HandleFunc("POST /admin/posts/{id}/publish", requireAdmin(r.authService, r.handlePublish))
 }
 
-func (r *Router) handleHealth(w http.ResponseWriter, request *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"env":    r.cfg.Env,
-	})
-}
-
-func (r *Router) handleListPublishedPosts(w http.ResponseWriter, request *http.Request) {
-	posts, err := r.postService.List(request.Context(), domain.ListPostsFilter{
-		Status: domain.PostStatusPublished,
-		Limit:  parseIntQuery(request, "limit", 20),
-		Offset: parseIntQuery(request, "offset", 0),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list published posts")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, posts)
-}
-
-func (r *Router) handleGetPublishedPost(w http.ResponseWriter, request *http.Request) {
-	post, err := r.postService.GetPublicBySlug(request.Context(), request.PathValue("slug"))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "post not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, post)
-}
-
-func (r *Router) handleLogin(w http.ResponseWriter, request *http.Request) {
-	var input service.LoginInput
-	if err := decodeJSON(request, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	result, err := r.authService.Login(request.Context(), input)
-	if err != nil {
-		if errors.Is(err, service.ErrInvalidCredentials) {
-			writeError(w, http.StatusUnauthorized, "invalid credentials")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "login failed")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, result)
-}
-
-func (r *Router) handleMe(w http.ResponseWriter, request *http.Request) {
-	user, ok := authenticatedUserFromContext(request.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, user)
-}
-
-func (r *Router) handleUploadImage(w http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(w, request.Body, r.cfg.ImageUploadMaxBytes)
-
-	file, _, err := request.FormFile("file")
-	if err != nil {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
-			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "image file is required")
-		return
-	}
-	defer file.Close()
-
-	result, err := r.imageService.Upload(request.Context(), file)
-	if err != nil {
-		if errors.Is(err, service.ErrImageTooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "image is too large")
-			return
-		}
-		if errors.Is(err, service.ErrInvalidImage) {
-			writeError(w, http.StatusBadRequest, "invalid image")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "upload image")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, result)
-}
-
-func (r *Router) handleListAdminPosts(w http.ResponseWriter, request *http.Request) {
-	posts, err := r.postService.List(request.Context(), domain.ListPostsFilter{
-		Status: domain.PostStatus(request.URL.Query().Get("status")),
-		Limit:  parseIntQuery(request, "limit", 20),
-		Offset: parseIntQuery(request, "offset", 0),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list posts")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, posts)
-}
-
-func (r *Router) handleSaveDraft(w http.ResponseWriter, request *http.Request) {
-	var input service.SavePostInput
-	if err := decodeJSON(request, &input); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	post, err := r.postService.SaveDraft(request.Context(), input)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, post)
-}
-
-func (r *Router) handlePublish(w http.ResponseWriter, request *http.Request) {
-	post, err := r.postService.Publish(request.Context(), request.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := r.revalidateNext(request.Context(), post); err != nil {
-		r.logger.Warn("revalidate next failed", "post_id", post.ID, "slug", post.Slug, "error", err)
-	}
-
-	writeJSON(w, http.StatusOK, post)
-}
-
-func (r *Router) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, request *http.Request) {
-		user, err := r.authService.VerifyAccessToken(bearerToken(request))
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-
-		ctx := context.WithValue(request.Context(), authenticatedUserContextKey{}, user)
-		next(w, request.WithContext(ctx))
-	}
-}
-
-type authenticatedUserContextKey struct{}
-
-func authenticatedUserFromContext(ctx context.Context) (service.AuthenticatedUser, bool) {
-	user, ok := ctx.Value(authenticatedUserContextKey{}).(service.AuthenticatedUser)
-	return user, ok
-}
-
-func bearerToken(request *http.Request) string {
-	authHeader := strings.TrimSpace(request.Header.Get("Authorization"))
-	scheme, token, ok := strings.Cut(authHeader, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return ""
-	}
-
-	return strings.TrimSpace(token)
-}
-
-func (r *Router) revalidateNext(ctx context.Context, post domain.Post) error {
-	if r.cfg.RevalidateURL == "" {
-		return nil
-	}
-
-	payload := map[string]string{
-		"secret": r.cfg.RevalidateSecret,
-		"path":   "/posts/" + post.Slug,
-		"tag":    "posts",
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal revalidate payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.RevalidateURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create revalidate request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("call revalidate endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("revalidate failed with status %s", resp.Status)
-	}
-
-	return nil
-}
-
-func decodeJSON(request *http.Request, target any) error {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, 2<<20))
+func decodeJSON(r *http.Request, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 2<<20))
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("invalid json: %w", err)
 	}
 
-	if decoder.Decode(&struct{}{}) == nil {
+	if decoder.More() {
 		return errors.New("invalid json: multiple objects")
 	}
 
@@ -291,8 +92,8 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
-func parseIntQuery(request *http.Request, key string, fallback int) int {
-	value := request.URL.Query().Get(key)
+func parseIntQuery(r *http.Request, key string, fallback int) int {
+	value := r.URL.Query().Get(key)
 	if value == "" {
 		return fallback
 	}
@@ -303,11 +104,4 @@ func parseIntQuery(request *http.Request, key string, fallback int) int {
 	}
 
 	return parsed
-}
-
-func loggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		next.ServeHTTP(w, request)
-		logger.Info("http request", "method", request.Method, "path", request.URL.Path)
-	})
 }

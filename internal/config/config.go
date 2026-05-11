@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,9 @@ type Config struct {
 	ImageUploadMaxBytes     int64
 	RevalidateURL           string
 	RevalidateSecret        string
+	AllowedOrigins          []string
+	LoginRateLimit          int
+	LoginRateWindow         time.Duration
 	Storage                 StorageConfig
 }
 
@@ -55,6 +59,9 @@ func Load() (Config, error) {
 		ImageUploadMaxBytes:     getenvInt64("IMAGE_UPLOAD_MAX_BYTES", 10<<20),
 		RevalidateURL:           os.Getenv("NEXT_REVALIDATE_URL"),
 		RevalidateSecret:        os.Getenv("NEXT_REVALIDATE_SECRET"),
+		AllowedOrigins:          splitCSV(os.Getenv("ALLOWED_ORIGINS")),
+		LoginRateLimit:          getenvInt("LOGIN_RATE_LIMIT", 10),
+		LoginRateWindow:         getenvDuration("LOGIN_RATE_WINDOW", time.Minute),
 		Storage: StorageConfig{
 			Endpoint:        getenv("S3_ENDPOINT", "http://localhost:8333"),
 			Region:          getenv("S3_REGION", "us-east-1"),
@@ -81,8 +88,31 @@ func Load() (Config, error) {
 	if cfg.ImageUploadMaxBytes <= 0 {
 		return Config{}, fmt.Errorf("IMAGE_UPLOAD_MAX_BYTES must be positive")
 	}
+	if cfg.LoginRateLimit < 0 {
+		return Config{}, fmt.Errorf("LOGIN_RATE_LIMIT must not be negative")
+	}
+	if cfg.LoginRateWindow <= 0 {
+		return Config{}, fmt.Errorf("LOGIN_RATE_WINDOW must be positive")
+	}
 
 	return cfg, nil
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
 }
 
 // HTTPAddr returns the host:port pair used by net/http.

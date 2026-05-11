@@ -16,26 +16,34 @@ const (
 
 // Post stores article metadata. Markdown and rendered HTML live in object storage.
 type Post struct {
-	ID               string     `json:"id"`
-	Title            string     `json:"title"`
-	Slug             string     `json:"slug"`
-	Excerpt          string     `json:"excerpt"`
-	MarkdownPath     string     `json:"markdownPath"`
-	RenderedHTMLPath string     `json:"renderedHtmlPath"`
-	CoverImagePath   string     `json:"coverImagePath,omitempty"`
-	Status           PostStatus `json:"status"`
-	AuthorID         string     `json:"authorId,omitempty"`
-	SEOTitle         string     `json:"seoTitle,omitempty"`
-	SEODescription   string     `json:"seoDescription,omitempty"`
-	PublishedAt      *time.Time `json:"publishedAt,omitempty"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	ID               string
+	Title            string
+	Slug             string
+	Excerpt          string
+	MarkdownPath     string
+	RenderedHTMLPath string
+	CoverImagePath   string
+	Status           PostStatus
+	AuthorID         string
+	SEOTitle         string
+	SEODescription   string
+	PublishedAt      *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
-// PublicPost is the API shape consumed by the public Next.js blog frontend.
+// PublicPost is the post payload exposed to public readers, with rendered HTML.
 type PublicPost struct {
 	Post
-	HTML string `json:"html"`
+	HTML string
+}
+
+// PostList groups paginated post results with the total count for the current filter.
+type PostList struct {
+	Items  []Post
+	Total  int64
+	Limit  int
+	Offset int
 }
 
 // ListPostsFilter contains optional filters for querying posts.

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -22,12 +21,19 @@ type PostRepository interface {
 	UpdateStatus(ctx context.Context, id string, status domain.PostStatus, publishedAt *time.Time) (domain.Post, error)
 	FindByID(ctx context.Context, id string) (domain.Post, error)
 	FindPublishedBySlug(ctx context.Context, slug string) (domain.Post, error)
-	List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, error)
+	List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, int64, error)
 }
 
 // Renderer defines Markdown rendering behavior.
 type Renderer interface {
 	Render(ctx context.Context, source string) (markdown.Result, error)
+}
+
+// Revalidator is a best-effort hook invoked after a post is published.
+// Implementations own their own logging and error semantics; PostService treats
+// failures as non-fatal side effects.
+type Revalidator interface {
+	Revalidate(ctx context.Context, post domain.Post) error
 }
 
 // SavePostInput represents editable article fields from the admin frontend.
@@ -45,28 +51,24 @@ type SavePostInput struct {
 
 // PostService coordinates article metadata, Markdown rendering, and object storage.
 type PostService struct {
-	repo          PostRepository
-	objectStore   storage.ObjectStore
-	renderer      Renderer
-	publicBaseURL string
-	httpClient    *http.Client
+	repo        PostRepository
+	objectStore storage.ObjectStore
+	renderer    Renderer
+	revalidator Revalidator
 }
 
-// NewPostService creates a PostService.
+// NewPostService creates a PostService. A nil revalidator disables the post-publish hook.
 func NewPostService(
 	repo PostRepository,
 	objectStore storage.ObjectStore,
 	renderer Renderer,
-	publicBaseURL string,
+	revalidator Revalidator,
 ) *PostService {
 	return &PostService{
-		repo:          repo,
-		objectStore:   objectStore,
-		renderer:      renderer,
-		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		repo:        repo,
+		objectStore: objectStore,
+		renderer:    renderer,
+		revalidator: revalidator,
 	}
 }
 
@@ -133,11 +135,15 @@ func (s *PostService) SaveDraft(ctx context.Context, input SavePostInput) (domai
 	}
 	post.Status = existing.Status
 	post.PublishedAt = existing.PublishedAt
+	if post.AuthorID == "" {
+		post.AuthorID = existing.AuthorID
+	}
 
 	return s.repo.Update(ctx, post)
 }
 
 // Publish marks a draft as public after validating required fields.
+// The revalidator hook is invoked as a best-effort side effect.
 func (s *PostService) Publish(ctx context.Context, id string) (domain.Post, error) {
 	post, err := s.repo.FindByID(ctx, id)
 	if err != nil {
@@ -153,7 +159,16 @@ func (s *PostService) Publish(ctx context.Context, id string) (domain.Post, erro
 		publishedAt = &now
 	}
 
-	return s.repo.UpdateStatus(ctx, id, domain.PostStatusPublished, publishedAt)
+	published, err := s.repo.UpdateStatus(ctx, id, domain.PostStatusPublished, publishedAt)
+	if err != nil {
+		return domain.Post{}, err
+	}
+
+	if s.revalidator != nil {
+		_ = s.revalidator.Revalidate(ctx, published)
+	}
+
+	return published, nil
 }
 
 // GetPublicBySlug loads a published post and its rendered HTML.
@@ -174,9 +189,35 @@ func (s *PostService) GetPublicBySlug(ctx context.Context, slug string) (domain.
 	}, nil
 }
 
-// List returns posts for admin or public listing views.
-func (s *PostService) List(ctx context.Context, filter domain.ListPostsFilter) ([]domain.Post, error) {
-	return s.repo.List(ctx, filter)
+// List returns posts for admin or public listing views along with the total
+// number of rows matching the filter, suitable for paginated UI.
+func (s *PostService) List(ctx context.Context, filter domain.ListPostsFilter) (domain.PostList, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	normalized := domain.ListPostsFilter{
+		Status: filter.Status,
+		Limit:  limit,
+		Offset: offset,
+	}
+
+	items, total, err := s.repo.List(ctx, normalized)
+	if err != nil {
+		return domain.PostList{}, err
+	}
+
+	return domain.PostList{
+		Items:  items,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
 }
 
 func validateSavePostInput(input SavePostInput) error {
