@@ -51,11 +51,19 @@ type UserResponse struct {
 }
 
 // LoginResponse is the JSON shape returned after a successful login.
+// The refresh token itself is delivered out-of-band through an HttpOnly cookie.
 type LoginResponse struct {
 	AccessToken string       `json:"accessToken"`
 	TokenType   string       `json:"tokenType"`
 	ExpiresAt   time.Time    `json:"expiresAt"`
 	User        UserResponse `json:"user"`
+}
+
+// RefreshResponse is the JSON shape returned after a successful token refresh.
+type RefreshResponse struct {
+	AccessToken string    `json:"accessToken"`
+	TokenType   string    `json:"tokenType"`
+	ExpiresAt   time.Time `json:"expiresAt"`
 }
 
 // AuthenticatedUserResponse exposes the trusted identity from the JWT.
@@ -123,6 +131,14 @@ func toLoginResponse(result service.LoginResult) LoginResponse {
 		TokenType:   result.TokenType,
 		ExpiresAt:   result.ExpiresAt,
 		User:        toUserResponse(result.User),
+	}
+}
+
+func toRefreshResponse(result service.LoginResult) RefreshResponse {
+	return RefreshResponse{
+		AccessToken: result.AccessToken,
+		TokenType:   result.TokenType,
+		ExpiresAt:   result.ExpiresAt,
 	}
 }
 

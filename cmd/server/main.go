@@ -74,6 +74,7 @@ func main() {
 
 	postRepo := mysqlrepo.NewPostRepository(db)
 	userRepo := mysqlrepo.NewUserRepository(db)
+	refreshTokenRepo := mysqlrepo.NewRefreshTokenRepository(db)
 
 	var revalidator service.Revalidator
 	if cfg.RevalidateURL != "" {
@@ -84,11 +85,14 @@ func main() {
 	imageService := service.NewImageService(objectStore, service.ImageUploadConfig{
 		MaxBytes: cfg.ImageUploadMaxBytes,
 	})
-	authService := service.NewAuthService(userRepo, service.AuthConfig{
-		JWTSecret:      cfg.JWTSecret,
-		JWTIssuer:      cfg.JWTIssuer,
-		AccessTokenTTL: cfg.JWTAccessTokenTTL,
-	})
+	authService := service.NewAuthService(userRepo, refreshTokenRepo, service.AuthConfig{
+		JWTSecret:       cfg.JWTSecret,
+		JWTIssuer:       cfg.JWTIssuer,
+		AccessTokenTTL:  cfg.JWTAccessTokenTTL,
+		RefreshTokenTTL: cfg.JWTRefreshTokenTTL,
+	}, logger)
+
+	go runRefreshTokenCleanup(ctx, authService, logger)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr(),
@@ -117,4 +121,29 @@ func main() {
 	}
 
 	logger.Info("server stopped")
+}
+
+// runRefreshTokenCleanup periodically prunes expired refresh tokens so the
+// table does not grow unbounded. The first sweep runs shortly after startup.
+func runRefreshTokenCleanup(ctx context.Context, authService *service.AuthService, logger *slog.Logger) {
+	const interval = 6 * time.Hour
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			sweepCtx, cancel := context.WithTimeout(ctx, time.Minute)
+			removed, err := authService.CleanupExpiredRefreshTokens(sweepCtx)
+			cancel()
+			if err != nil {
+				logger.Warn("cleanup expired refresh tokens", "error", err)
+			} else if removed > 0 {
+				logger.Info("cleanup expired refresh tokens", "removed", removed)
+			}
+			timer.Reset(interval)
+		}
+	}
 }

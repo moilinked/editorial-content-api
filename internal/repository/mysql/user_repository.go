@@ -19,6 +19,17 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
+// FindByID returns a user by primary key.
+func (r *UserRepository) FindByID(ctx context.Context, id string) (domain.User, error) {
+	var record userRecord
+	err := r.db.WithContext(ctx).First(&record, "id = ?", id).Error
+	if err != nil {
+		return domain.User{}, fmt.Errorf("find user by id: %w", err)
+	}
+
+	return record.toDomain(), nil
+}
+
 // FindByEmail returns an active or inactive user by email.
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (domain.User, error) {
 	var record userRecord

@@ -22,13 +22,26 @@ type Config struct {
 	JWTSecret               string
 	JWTIssuer               string
 	JWTAccessTokenTTL       time.Duration
+	JWTRefreshTokenTTL      time.Duration
 	ImageUploadMaxBytes     int64
 	RevalidateURL           string
 	RevalidateSecret        string
 	AllowedOrigins          []string
 	LoginRateLimit          int
 	LoginRateWindow         time.Duration
+	RefreshCookie           RefreshCookieConfig
 	Storage                 StorageConfig
+}
+
+// RefreshCookieConfig controls how the refresh token cookie is emitted.
+// SameSite values: "lax" (default), "strict", "none". When SameSite is "none"
+// the cookie is always emitted with Secure regardless of Secure setting.
+type RefreshCookieConfig struct {
+	Name     string
+	Path     string
+	Domain   string
+	Secure   bool
+	SameSite string
 }
 
 // StorageConfig contains S3-compatible storage settings for SeaweedFS.
@@ -55,13 +68,21 @@ func Load() (Config, error) {
 		PublicBaseURL:           getenv("PUBLIC_BASE_URL", "http://localhost:8080"),
 		JWTSecret:               os.Getenv("JWT_SECRET"),
 		JWTIssuer:               getenv("JWT_ISSUER", "editorial-content-api"),
-		JWTAccessTokenTTL:       getenvDuration("JWT_ACCESS_TOKEN_TTL", time.Hour),
+		JWTAccessTokenTTL:       getenvDuration("JWT_ACCESS_TOKEN_TTL", 24*time.Hour),
+		JWTRefreshTokenTTL:      getenvDuration("JWT_REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		ImageUploadMaxBytes:     getenvInt64("IMAGE_UPLOAD_MAX_BYTES", 10<<20),
 		RevalidateURL:           os.Getenv("NEXT_REVALIDATE_URL"),
 		RevalidateSecret:        os.Getenv("NEXT_REVALIDATE_SECRET"),
 		AllowedOrigins:          splitCSV(os.Getenv("ALLOWED_ORIGINS")),
 		LoginRateLimit:          getenvInt("LOGIN_RATE_LIMIT", 10),
 		LoginRateWindow:         getenvDuration("LOGIN_RATE_WINDOW", time.Minute),
+		RefreshCookie: RefreshCookieConfig{
+			Name:     getenv("REFRESH_COOKIE_NAME", "refresh_token"),
+			Path:     getenv("REFRESH_COOKIE_PATH", "/admin"),
+			Domain:   os.Getenv("REFRESH_COOKIE_DOMAIN"),
+			Secure:   getenvBool("REFRESH_COOKIE_SECURE", true),
+			SameSite: strings.ToLower(getenv("REFRESH_COOKIE_SAMESITE", "lax")),
+		},
 		Storage: StorageConfig{
 			Endpoint:        getenv("S3_ENDPOINT", "http://localhost:8333"),
 			Region:          getenv("S3_REGION", "us-east-1"),
@@ -81,6 +102,23 @@ func Load() (Config, error) {
 	}
 	if cfg.JWTAccessTokenTTL <= 0 {
 		return Config{}, fmt.Errorf("JWT_ACCESS_TOKEN_TTL must be positive")
+	}
+	if cfg.JWTRefreshTokenTTL <= 0 {
+		return Config{}, fmt.Errorf("JWT_REFRESH_TOKEN_TTL must be positive")
+	}
+	if cfg.JWTRefreshTokenTTL <= cfg.JWTAccessTokenTTL {
+		return Config{}, fmt.Errorf("JWT_REFRESH_TOKEN_TTL must be greater than JWT_ACCESS_TOKEN_TTL")
+	}
+	switch cfg.RefreshCookie.SameSite {
+	case "lax", "strict", "none":
+	default:
+		return Config{}, fmt.Errorf("REFRESH_COOKIE_SAMESITE must be one of lax, strict, none")
+	}
+	if cfg.RefreshCookie.SameSite == "none" && !cfg.RefreshCookie.Secure {
+		return Config{}, fmt.Errorf("REFRESH_COOKIE_SECURE must be true when REFRESH_COOKIE_SAMESITE=none")
+	}
+	if cfg.RefreshCookie.Name == "" {
+		return Config{}, fmt.Errorf("REFRESH_COOKIE_NAME must not be empty")
 	}
 	if cfg.Storage.Bucket == "" {
 		return Config{}, fmt.Errorf("S3_BUCKET is required")

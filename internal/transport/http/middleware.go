@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"editorial-content-api/internal/config"
 	"editorial-content-api/internal/service"
 )
 
@@ -227,4 +228,34 @@ func newRequestID() string {
 		return "unknown"
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// setRefreshCookie writes the refresh token to the configured HttpOnly cookie.
+// A non-positive maxAge clears the cookie.
+func setRefreshCookie(w http.ResponseWriter, cfg config.RefreshCookieConfig, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     cfg.Name,
+		Value:    value,
+		Path:     cfg.Path,
+		Domain:   cfg.Domain,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   cfg.Secure,
+		SameSite: sameSiteFromString(cfg.SameSite),
+	})
+}
+
+func clearRefreshCookie(w http.ResponseWriter, cfg config.RefreshCookieConfig) {
+	setRefreshCookie(w, cfg, "", -1)
+}
+
+func sameSiteFromString(value string) http.SameSite {
+	switch strings.ToLower(value) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }

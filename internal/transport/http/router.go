@@ -56,6 +56,8 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("GET /posts/{slug}", r.handleGetPublishedPost)
 
 	r.mux.HandleFunc("POST /admin/login", r.loginLimiter.middleware(r.handleLogin))
+	r.mux.HandleFunc("POST /admin/refresh", r.loginLimiter.middleware(r.handleRefresh))
+	r.mux.HandleFunc("POST /admin/logout", r.loginLimiter.middleware(r.handleLogout))
 	r.mux.HandleFunc("GET /admin/me", requireAdmin(r.authService, r.handleMe))
 	r.mux.HandleFunc("POST /admin/uploads/images", requireAdmin(r.authService, r.handleUploadImage))
 	r.mux.HandleFunc("GET /admin/posts", requireAdmin(r.authService, r.handleListAdminPosts))

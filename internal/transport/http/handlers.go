@@ -3,6 +3,7 @@ package httptransport
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"editorial-content-api/internal/domain"
 	"editorial-content-api/internal/service"
@@ -46,7 +47,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	result, err := r.authService.Login(request.Context(), input)
+	result, err := r.authService.Login(request.Context(), input, clientMetadata(request))
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCredentials) {
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
@@ -56,7 +57,50 @@ func (r *Router) handleLogin(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	r.writeAuthTokens(w, result)
 	writeJSON(w, http.StatusOK, toLoginResponse(result))
+}
+
+func (r *Router) handleRefresh(w http.ResponseWriter, request *http.Request) {
+	cookie, err := request.Cookie(r.cfg.RefreshCookie.Name)
+	if err != nil || cookie.Value == "" {
+		writeError(w, http.StatusUnauthorized, "missing refresh token")
+		return
+	}
+
+	result, err := r.authService.Refresh(request.Context(), cookie.Value, clientMetadata(request))
+	if err != nil {
+		clearRefreshCookie(w, r.cfg.RefreshCookie)
+		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	r.writeAuthTokens(w, result)
+	writeJSON(w, http.StatusOK, toRefreshResponse(result))
+}
+
+func (r *Router) handleLogout(w http.ResponseWriter, request *http.Request) {
+	if cookie, err := request.Cookie(r.cfg.RefreshCookie.Name); err == nil && cookie.Value != "" {
+		_ = r.authService.Logout(request.Context(), cookie.Value)
+	}
+
+	clearRefreshCookie(w, r.cfg.RefreshCookie)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Router) writeAuthTokens(w http.ResponseWriter, result service.LoginResult) {
+	maxAge := int(time.Until(result.RefreshExpiresAt).Seconds())
+	if maxAge < 1 {
+		maxAge = 1
+	}
+	setRefreshCookie(w, r.cfg.RefreshCookie, result.RefreshToken, maxAge)
+}
+
+func clientMetadata(request *http.Request) service.ClientMetadata {
+	return service.ClientMetadata{
+		UserAgent: request.Header.Get("User-Agent"),
+		IPAddress: clientIP(request),
+	}
 }
 
 func (r *Router) handleMe(w http.ResponseWriter, request *http.Request) {
